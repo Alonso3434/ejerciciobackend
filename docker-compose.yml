@@ -1,0 +1,86 @@
+services:
+  db-inventario:
+    image: tuusuario/db-inventario-videojuegos:1.0
+    container_name: db-inventario-videojuegos
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: admin123
+      MYSQL_DATABASE: tienda_videojuegos_inventario
+    ports:
+      - "3307:3306"
+    volumes:
+      - inventario_data:/var/lib/mysql
+    networks:
+      - red-videojuegos
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -padmin123 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+
+  db-ventas:
+    image: tuusuario/db-ventas-videojuegos:1.0
+    container_name: db-ventas-videojuegos
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: admin123
+      MYSQL_DATABASE: tienda_videojuegos_ventas
+    ports:
+      - "3308:3306"
+    volumes:
+      - ventas_data:/var/lib/mysql
+    networks:
+      - red-videojuegos
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -padmin123 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+
+  msv-ventas:
+    image: tuusuario/msv-ventas-videojuegos:1.0
+    container_name: msv-ventas-videojuegos
+    restart: always
+    ports:
+      - "3002:3002"
+    environment:
+      PORT: 3002
+      DB_HOST: db-ventas
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASSWORD: admin123
+      DB_NAME: tienda_videojuegos_ventas
+    depends_on:
+      db-ventas:
+        condition: service_healthy
+    networks:
+      - red-videojuegos
+
+  msv-despacho:
+    image: tuusuario/msv-despacho-videojuegos:1.0
+    container_name: msv-despacho-videojuegos
+    restart: always
+    ports:
+      - "3003:3003"
+    environment:
+      PORT: 3003
+      DB_HOST: db-ventas
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASSWORD: admin123
+      DB_NAME: tienda_videojuegos_ventas
+    depends_on:
+      db-ventas:
+        condition: service_healthy
+    networks:
+      - red-videojuegos
+
+volumes:
+  inventario_data:
+  ventas_data:
+
+networks:
+  red-videojuegos:
+    driver: bridge
