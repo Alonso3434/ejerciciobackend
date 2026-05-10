@@ -1,0 +1,71 @@
+name: Build, Push and Deploy Backend Stack
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build Docker images
+        run: |
+          docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/msv-ventas-videojuegos:latest ./msv-ventas
+          docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/msv-despacho-videojuegos:latest ./msv-despacho
+          docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/db-inventario-videojuegos:latest ./bd-videojuegos/inventario
+          docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/db-ventas-videojuegos:latest ./bd-videojuegos/ventas
+
+      - name: Push Docker images
+        run: |
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/msv-ventas-videojuegos:latest
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/msv-despacho-videojuegos:latest
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/db-inventario-videojuegos:latest
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/db-ventas-videojuegos:latest
+
+      - name: Set up AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+
+      - name: Add SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+      - name: Create deployment folder in EC2
+        run: |
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${{ secrets.USER_SERVER }}@${{ secrets.EC2_HOST }} "mkdir -p ~/tienda-videojuegos-backend"
+
+      - name: Copy docker-compose to EC2
+        run: |
+          scp -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null docker-compose.prod.yml ${{ secrets.USER_SERVER }}@${{ secrets.EC2_HOST }}:~/tienda-videojuegos-backend/docker-compose.yml
+
+      - name: Deploy stack in EC2
+        run: |
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${{ secrets.USER_SERVER }}@${{ secrets.EC2_HOST }} << EOF
+            cd ~/tienda-videojuegos-backend
+
+            echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+            docker compose pull
+            docker compose down
+            docker compose up -d
+
+            docker image prune -f
+          EOF
