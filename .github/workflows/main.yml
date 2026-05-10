@@ -22,6 +22,8 @@ jobs:
 
       - name: Build Docker images
         run: |
+          set -e
+
           docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/msv-ventas-videojuegos:latest ./msv-ventas
           docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/msv-despacho-videojuegos:latest ./msv-despacho
           docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/db-inventario-videojuegos:latest ./bd-videojuegos/inventario
@@ -29,6 +31,8 @@ jobs:
 
       - name: Push Docker images
         run: |
+          set -e
+
           docker push ${{ secrets.DOCKERHUB_USERNAME }}/msv-ventas-videojuegos:latest
           docker push ${{ secrets.DOCKERHUB_USERNAME }}/msv-despacho-videojuegos:latest
           docker push ${{ secrets.DOCKERHUB_USERNAME }}/db-inventario-videojuegos:latest
@@ -44,28 +48,101 @@ jobs:
 
       - name: Add SSH Key
         run: |
+          set -e
+
           mkdir -p ~/.ssh
           echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
 
       - name: Create deployment folder in EC2
         run: |
-          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${{ secrets.USER_SERVER }}@${{ secrets.EC2_HOST }} "mkdir -p ~/tienda-videojuegos-backend"
+          set -e
+
+          ssh -i ~/.ssh/id_rsa \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            ${{ secrets.USER_SERVER }}@${{ secrets.EC2_HOST }} \
+            "mkdir -p ~/tienda-videojuegos-backend"
 
       - name: Copy docker-compose to EC2
         run: |
-          scp -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null docker-compose.prod.yml ${{ secrets.USER_SERVER }}@${{ secrets.EC2_HOST }}:~/tienda-videojuegos-backend/docker-compose.yml
+          set -e
+
+          scp -i ~/.ssh/id_rsa \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            docker-compose.prod.yml \
+            ${{ secrets.USER_SERVER }}@${{ secrets.EC2_HOST }}:~/tienda-videojuegos-backend/docker-compose.yml
 
       - name: Deploy stack in EC2
         run: |
-          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${{ secrets.USER_SERVER }}@${{ secrets.EC2_HOST }} << EOF
+          set -e
+
+          ssh -i ~/.ssh/id_rsa \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            ${{ secrets.USER_SERVER }}@${{ secrets.EC2_HOST }} << EOF
+
+            set -e
+
             cd ~/tienda-videojuegos-backend
 
+            echo "Validando docker..."
+            docker --version
+
+            echo "Validando docker-compose..."
+            if ! command -v docker-compose >/dev/null 2>&1; then
+              echo "ERROR: docker-compose no está instalado en la EC2"
+              exit 1
+            fi
+
+            docker-compose --version
+
+            echo "Creando archivo .env..."
+            echo "DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }}" > .env
+
+            echo "Autenticando en Docker Hub..."
             echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
 
-            docker compose pull
-            docker compose down
-            docker compose up -d
+            echo "Descargando imágenes desde Docker Hub..."
+            docker-compose pull
 
+            echo "Deteniendo stack anterior..."
+            docker-compose down
+
+            echo "Levantando stack actualizado..."
+            docker-compose up -d
+
+            echo "Esperando inicio de servicios..."
+            sleep 30
+
+            echo "Estado de contenedores:"
+            docker-compose ps
+
+            echo "Validando contenedores activos..."
+            docker ps --format '{{.Names}}' | grep -q "db-inventario-videojuegos" || { echo "ERROR: db-inventario-videojuegos no está activo"; exit 1; }
+            docker ps --format '{{.Names}}' | grep -q "db-ventas-videojuegos" || { echo "ERROR: db-ventas-videojuegos no está activo"; exit 1; }
+            docker ps --format '{{.Names}}' | grep -q "msv-ventas-videojuegos" || { echo "ERROR: msv-ventas-videojuegos no está activo"; exit 1; }
+            docker ps --format '{{.Names}}' | grep -q "msv-despacho-videojuegos" || { echo "ERROR: msv-despacho-videojuegos no está activo"; exit 1; }
+
+            echo "Validando endpoints internos..."
+            if ! command -v curl >/dev/null 2>&1; then
+              echo "ERROR: curl no está instalado en la EC2"
+              exit 1
+            fi
+
+            curl -f http://localhost:3002/api/ventas/health
+            curl -f http://localhost:3003/api/despachos/health
+
+            echo "Validando conexión a base de datos de ventas..."
+            docker exec db-ventas-videojuegos mysql -u root -padmin123 tienda_videojuegos_ventas -e "SHOW TABLES;"
+
+            echo "Validando conexión a base de datos de inventario..."
+            docker exec db-inventario-videojuegos mysql -u root -padmin123 tienda_videojuegos_inventario -e "SHOW TABLES;"
+
+            echo "Limpiando imágenes no utilizadas..."
             docker image prune -f
+
+            echo "Despliegue finalizado correctamente"
+
           EOF
