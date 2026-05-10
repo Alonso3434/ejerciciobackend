@@ -33,11 +33,11 @@ services:
     networks:
       - red-videojuegos
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -padmin123 || exit 1"]
-      interval: 10s
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -padmin123 --silent || exit 1"]
+      interval: 15s
       timeout: 10s
-      retries: 10
-      start_period: 40s
+      retries: 20
+      start_period: 120s
 
   msv-ventas:
     image: ${DOCKERHUB_USERNAME}/msv-ventas-videojuegos:latest
